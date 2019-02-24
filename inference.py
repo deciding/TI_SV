@@ -69,6 +69,9 @@ def main():
         wav1_dvector = np.mean(wav1_out, axis=0)
         wav2_dvector = np.mean(wav2_out, axis=0)
 
+        #print(wav1_dvector)
+        #print(wav2_dvector)
+
         final_score = dot(wav1_dvector, wav2_dvector)/(norm(wav1_dvector)*norm(wav2_dvector))
 
         print("final score:" + str(final_score))
