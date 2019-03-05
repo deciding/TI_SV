@@ -136,6 +136,7 @@ class Feeder():
         # for ex) /home/hdd2tb/ninas96211/dev_wav_set/id10343_pCDWKHjQjso_00002.wav
 
         wavs_list = [self.hparams.in_wav1, self.hparams.in_wav2]
+        print(wavs_list)
 
         # file_name for ex) id10343_pCDWKHjQjso_00002
         for wav_path in wavs_list:
@@ -148,11 +149,11 @@ class Feeder():
             total_wav = b""
             for i, segment in enumerate(segments):
                 total_wav += segment
-                print(wav_id+ " : " + str(i)+"th segment appended")
+                #print(wav_id+ " : " + str(i)+"th segment appended")
             # Without writing, unpack total_wav into numpy [N,1] array
             # 16bit PCM 기준 dtype=np.int16
             wav_arr = np.frombuffer(total_wav, dtype=np.int16)
-            print("read audio data from byte string. np array of shape:"+str(wav_arr.shape))
+            #print("read audio data from byte string. np array of shape:"+str(wav_arr.shape))
             logmel_feats = logfbank(wav_arr, samplerate=sample_rate, nfilt=40)
             # file_name for ex, 'id10343_pCDWKHjQjso_00002'
             self.save_dict[wav_id] = logmel_feats
@@ -166,17 +167,17 @@ class Feeder():
 
         for wav_name, feats in self.save_dict.items():
             if wav_name.split("_")[0] == prev_wav_name:
-                print("spk_id" + wav_name.split("_")[0])
+                #print("spk_id" + wav_name.split("_")[0])
                 match = True
             total_len = feats.shape[0]
             num_dvectors = int((total_len - num_overlap_frames) // (num_frames - num_overlap_frames))
-            print("num dvec:" + str(num_dvectors))
+            #print("num dvec:" + str(num_dvectors))
             dvectors = []
             for dvec_idx in range(num_dvectors):
                 start_idx = int((num_frames - num_overlap_frames) * dvec_idx)
                 end_idx = int(start_idx + num_frames)
-                print("wavname: " + wav_name + " start_idx: " + str(start_idx) )
-                print("wavname: " + wav_name + " end_idx: " + str(end_idx) )
+                #print("wavname: " + wav_name + " start_idx: " + str(start_idx) )
+                #print("wavname: " + wav_name + " end_idx: " + str(end_idx) )
                 dvectors.append(feats[start_idx:end_idx, :])
             dvectors = np.asarray(dvectors)
             dvector_dict[wav_name] = dvectors
@@ -186,9 +187,11 @@ class Feeder():
         wav1_data = list(dvector_dict.values())[0]
         wav2_data = list(dvector_dict.values())[1]
 
-        print("match: " + str(match))
-        print("wav1_data.shape:" + str(wav1_data.shape))
-        print("wav2_data.shape:" + str(wav2_data.shape))
+        self.save_dict = {};
+
+        #print("match: " + str(match))
+        #print("wav1_data.shape:" + str(wav1_data.shape))
+        #print("wav2_data.shape:" + str(wav2_data.shape))
         return wav1_data, wav2_data, match
 
 
