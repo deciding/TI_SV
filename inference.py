@@ -96,10 +96,12 @@ def get_dvector_of_dir(sess, feeder, model, args):
         wav1_out = sess.run(model.norm_out, feed_dict={model.input_batch:wav1_data})
         new_total_vectors=np.concatenate((total_vectors, wav1_out), axis=0) if total_vectors is not None else wav1_out
         if total_vectors is not None:
-            dvec1=np.mean(new_total_vectors, axis=0)
-            dvec2=np.mean(total_vectors,axis=0)
+            #dvec1=np.mean(new_total_vectors, axis=0)
+            #dvec2=np.mean(total_vectors,axis=0)
+            dvec1=np.mean(total_vectors, axis=0)
+            dvec2=np.mean(wav1_out,axis=0)
             cossim=dot(dvec1, dvec2)/(norm(dvec1)*norm(dvec2))
-            print("=================================================================================================================" + str(rmse(dvec1,dvec2)) + "   " + str(cossim) + "   " + str(np.size(total_vectors, 0)))
+            print("=================================================================================================================" + str(rmse(dvec1,dvec2)) + "   " + str(cossim) + "   " + str(np.size(new_total_vectors, 0)))
             if cossim > 0.999:
                 np.save('a.npy', dvec1)
                 return
