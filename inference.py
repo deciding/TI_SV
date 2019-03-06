@@ -86,13 +86,19 @@ def rmse(predictions, targets):
     return np.sqrt(np.mean((predictions-targets)**2))
 
 def get_dvector_of_dir(sess, feeder, model, args):
-    in_wavs=glob.glob(args.in_dir + '/*.wav')
+    if args.in_dir.endswith('.wav'):
+        in_wavs=[args.in_dir]
+    else:
+        in_wavs=glob.glob(args.in_dir + '/*.wav')
     total_vectors=None
 
     #print(in_wavs)
+    small_sim_cnt=0
     for in_wav1 in in_wavs:
         args.in_wav1=in_wav1
         wav1_data, wav2_data, match = feeder.create_infer_batch()
+        if len(wav1_data)==0:
+            continue
         wav1_out = sess.run(model.norm_out, feed_dict={model.input_batch:wav1_data})
         new_total_vectors=np.concatenate((total_vectors, wav1_out), axis=0) if total_vectors is not None else wav1_out
         if total_vectors is not None:
@@ -101,10 +107,12 @@ def get_dvector_of_dir(sess, feeder, model, args):
             dvec1=np.mean(total_vectors, axis=0)
             dvec2=np.mean(wav1_out,axis=0)
             cossim=dot(dvec1, dvec2)/(norm(dvec1)*norm(dvec2))
-            print("=================================================================================================================" + str(rmse(dvec1,dvec2)) + "   " + str(cossim) + "   " + str(np.size(new_total_vectors, 0)))
-            if cossim > 0.999:
-                np.save('a.npy', dvec1)
-                return
+            if cossim < 0.5:
+                small_sim_cnt+=1
+                print("=================================================================================================================" + str(rmse(dvec1,dvec2)) + "   " + str(cossim) + "   " + str(np.size(new_total_vectors, 0)) + "   " + str(small_sim_cnt))
+            #if cossim > 0.999:
+            #    np.save('a.npy', dvec1)
+            #    return
 
             #print(np.mean(total_vectors,axis=0))
             #print(np.mean(new_total_vectors,axis=0))

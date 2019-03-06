@@ -88,6 +88,7 @@ bash data_gen.sh /home/ninas96211/data/test_wav/id10275/CVUXDNZzcmA/00002.wav ~/
 ```python
 python inference.py --in_wav1 /home/ninas96211/data/test_wav_set/id10309_pwfqGqgezH4_00004.wav --in_wav2 /home/ninas96211/data/test_wav_set/id10296_f_k09R8r_cA_00004.wav --ckpt_file ./ckpt/model.ckpt-35000
 ```
+CUDA_VISIBLE_DEVICES=9 python inference.py --in_dir data --in_wav2 tmp/voice_bb_clip_id_1_000646.wav --ckpt_file xckpt/model.ckpt-58100
 
 ## Current Issues
 
