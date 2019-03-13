@@ -153,6 +153,8 @@ class Feeder():
             # Without writing, unpack total_wav into numpy [N,1] array
             # 16bit PCM 기준 dtype=np.int16
             wav_arr = np.frombuffer(total_wav, dtype=np.int16)
+            if len(wav_arr) == 0:
+                return [],[],False
             #print("read audio data from byte string. np array of shape:"+str(wav_arr.shape))
             logmel_feats = logfbank(wav_arr, samplerate=sample_rate, nfilt=40)
             # file_name for ex, 'id10343_pCDWKHjQjso_00002'
