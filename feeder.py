@@ -135,7 +135,8 @@ class Feeder():
         # self.hparams.in_wav1, self.hparams.in_wav2 are full paths of the wav file
         # for ex) /home/hdd2tb/ninas96211/dev_wav_set/id10343_pCDWKHjQjso_00002.wav
 
-        wavs_list = [self.hparams.in_wav1, self.hparams.in_wav2]
+        #wavs_list = [self.hparams.in_wav1, self.hparams.in_wav2]
+        wavs_list = [self.hparams.in_wav1]
         print(wavs_list)
 
         # file_name for ex) id10343_pCDWKHjQjso_00002
@@ -187,7 +188,7 @@ class Feeder():
 
 
         wav1_data = list(dvector_dict.values())[0]
-        wav2_data = list(dvector_dict.values())[1]
+        #wav2_data = list(dvector_dict.values())[1]
 
         self.save_dict = {};
 
@@ -195,6 +196,7 @@ class Feeder():
         #print("wav1_data.shape:" + str(wav1_data.shape))
         #print("wav2_data.shape:" + str(wav2_data.shape))
         return wav1_data, wav2_data, match
+        return wav1_data, None, match
 
 
 if __name__ == "__main__":
