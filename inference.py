@@ -101,6 +101,7 @@ def get_dvector_of_dir(sess, feeder, model, args):
             continue
         wav1_out = sess.run(model.norm_out, feed_dict={model.input_batch:wav1_data})
         new_total_vectors=np.concatenate((total_vectors, wav1_out), axis=0) if total_vectors is not None else wav1_out
+
         #if total_vectors is not None:
         #    #dvec1=np.mean(new_total_vectors, axis=0)
         #    #dvec2=np.mean(total_vectors,axis=0)

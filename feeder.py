@@ -195,7 +195,7 @@ class Feeder():
         #print("match: " + str(match))
         #print("wav1_data.shape:" + str(wav1_data.shape))
         #print("wav2_data.shape:" + str(wav2_data.shape))
-        return wav1_data, wav2_data, match
+        #return wav1_data, wav2_data, match
         return wav1_data, None, match
 
 
