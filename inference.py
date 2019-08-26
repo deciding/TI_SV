@@ -7,6 +7,7 @@ from feeder import Feeder
 from numpy import dot
 from numpy.linalg import norm
 import glob
+import os
 
 def main():
 
@@ -23,7 +24,7 @@ def main():
     #/home/hdd2tb/ninas96211/dev_wav_set
     parser.add_argument("--mode", default="infer", choices=["train", "test", "infer"], help="setting mode for execution")
 
-    parser.add_argument("--ckpt_file", type=str, required=True, help="checkpoint to start with for inference")
+    parser.add_argument("--ckpt_file", type=str, default='./xckpt/model.ckpt-58100', help="checkpoint to start with for inference")
 
     # Data
     #parser.add_argument("--window_length", type=int, default=160, help="sliding window length(frames)")
@@ -41,9 +42,15 @@ def main():
     parser.add_argument("--num_lstm_stacks", type=int, default=3, help="number of LSTM stacks")
     parser.add_argument("--num_lstm_cells", type=int, default=768, help="number of LSTM cells")
     parser.add_argument("--dim_lstm_projection", type=int, default=256, help="dimension of LSTM projection")
+    parser.add_argument('--gpu', default=0,
+                        help='Path to model checkpoint')
 
     # Collect hparams
     args = parser.parse_args()
+
+    import os
+    os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
+    os.environ["CUDA_VISIBLE_DEVICES"]=str(args.gpu)
 
     feeder = Feeder(args)
     feeder.set_up_feeder()
@@ -61,7 +68,8 @@ def main():
 
         saver.restore(sess, args.ckpt_file)
 
-        get_dvector_of_dir(sess, feeder, model, args)
+        #get_dvector_of_dir(sess, feeder, model, args)
+        save_dvector_of_dir(sess, feeder, model, args)
 
         #wav1_data, wav2_data, match = feeder.create_infer_batch()
 
@@ -84,6 +92,27 @@ def main():
 
 def rmse(predictions, targets):
     return np.sqrt(np.mean((predictions-targets)**2))
+
+def save_dvector_of_dir(sess, feeder, model, args):
+    if args.in_dir.endswith('.wav'):
+        in_wavs=[args.in_dir]
+    else:
+        in_wavs=glob.glob(args.in_dir + '/*.wav')
+    total_vectors=None
+
+    #print(in_wavs)
+    small_sim_cnt=0
+    for in_wav1 in in_wavs:
+        args.in_wav1=in_wav1
+        filename=os.path.splitext((in_wav1))[0]
+        print(filename)
+        wav1_data, wav2_data, match = feeder.create_infer_batch()
+        if len(wav1_data)==0:
+            continue
+        wav1_out = sess.run(model.norm_out, feed_dict={model.input_batch:wav1_data})
+        wav1_dvector = np.mean(wav1_out, axis=0)
+
+        np.save('%s.npy' % filename, wav1_dvector)
 
 def get_dvector_of_dir(sess, feeder, model, args):
     if args.in_dir.endswith('.wav'):
