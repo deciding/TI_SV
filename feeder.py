@@ -24,7 +24,6 @@ vox1_dev_wav - id #### - 0DOmwbPlPvY - 00001.wav
                                      - ...
                        - 5VNK93duiOM
                        - ...
-                       
              - id #### - ...
 
 """
@@ -36,6 +35,11 @@ class Feeder():
         if self.hparams.mode == "train":
             assert data_type != None
             self.data_type = data_type
+
+        if "eval" in data_type:
+            self.mode = "eval"
+        else:
+            self.mode = "normal"
 
         # 나중에 좀 더 다양한 데이터를 input으로 받아서 process할 수 있도록 하는 부분 추가
     def set_up_feeder(self, queue=None):
@@ -67,7 +71,11 @@ class Feeder():
         list += batch
         return batch
 
-    
+    def generator_eval(self, list, num_elements):
+        # python gets list arg as reference
+        batch = list[:num_elements]
+        return batch
+
     def is_invalid_spk(self, spk_id):
         # check if each speaker has more than at least self.hparams.num_utt_per_batch utterances
         spk_utt = [1 for pickle in self.pickles if re.search(spk_id, pickle)]
@@ -90,16 +98,22 @@ class Feeder():
             self.queue.put([in_batch, target_batch])
 
         self.queue.task_done()
-    
+
     def create_train_batch(self):
+        # 10ms each frame
         num_frames = int(self.hparams.segment_length * 100)
-        spk_batch = self.generator(self.spk_names, self.hparams.num_spk_per_batch)
-        target_batch = [spk for spk in range(self.hparams.num_spk_per_batch) for i in range(self.hparams.num_utt_per_batch)]
+        # pop and shift to back
+        if self.mode == 'eval':
+            spk_batch = self.generator_eval(self.spk_names, self.hparams.num_spk_per_batch)
+        else:
+            spk_batch = self.generator(self.spk_names, self.hparams.num_spk_per_batch)
+        target_batch = [spk for spk in range(self.hparams.num_spk_per_batch) for i in range(self.hparams.num_utt_per_batch)] # spk_num_per_batch * utt_number_per_batch
         #print("spk_batch: " + str(spk_batch))
         #print("target_batch: " + str(target_batch))
         in_batch = []
 
         for spk_id in spk_batch:
+            # check in flat pickle dir that the num of utt for this spkid is enough
             if self.is_invalid_spk(spk_id):
                 print("speaker id: " + spk_id + " has less than " + str(self.hparams.num_utt_per_batch) + " utt files")
                 continue
@@ -107,7 +121,7 @@ class Feeder():
             speaker_pickle_files_list = [file_name for file_name in os.listdir(self.hparams.in_dir + "/" + self.data_type) if re.search(spk_id, file_name) is not None]
             num_pickle_per_speaker = len(speaker_pickle_files_list)
 
-            # list of indices in speaker_pickle_files_list
+            # list of indices in speaker_pickle_files_list: random with replacement
             utt_idx_list = random.choices(range(num_pickle_per_speaker), k=self.hparams.num_utt_per_batch)
             #print("utt_idx_list for " +str(spk_id)+" is " + str(utt_idx_list))
             for utt_idx in utt_idx_list:
@@ -126,8 +140,8 @@ class Feeder():
                 logmel_feats = total_logmel_feats[start_idx:start_idx+num_frames, :]
                 in_batch.append(logmel_feats)
 
-        in_batch = np.asarray(in_batch)
-        target_batch = np.asarray(target_batch)
+        in_batch = np.asarray(in_batch) # num spk * num utt, log mel
+        target_batch = np.asarray(target_batch) # spkid lables
 
         return in_batch, target_batch
 

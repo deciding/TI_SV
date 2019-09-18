@@ -23,6 +23,7 @@ def tf_scaled_cosine_similarity(a, b):
     normalize_b = tf.transpose(tf.nn.l2_normalize(b, axis=-1))
 
     # cosine similarity vector [1,64]
+    # [1,256] * [256, 64]
     cos_similarity = tf.reshape(tf.matmul(normalize_a, normalize_b),[-1]) # [1,64] to [64]
 
     # w is always positive
@@ -31,11 +32,9 @@ def tf_scaled_cosine_similarity(a, b):
         bias = tf.Variable(-5.0, name="scale_bias")
         tf.assign(w, tf.clip_by_value(w, 0.0, 1000.0))
 
-    
     # scaled cosine similarity
     scaled_cos_similarity = tf.add(tf.multiply(w, cos_similarity), bias)
-    
-    
+
     return scaled_cos_similarity
 
 """
@@ -55,10 +54,10 @@ def tf_scaled_cosine_similarity(a, b):
         w = tf.Variable(10, name="scale_weight")
         bias = tf.Variable(-5, name="scale_bias")
         tf.assign(w, tf.clip_by_value(w, 0, np.infty))
-    
+
     # scaled cosine similarity
     scaled_cos_similarity = tf.add(tf.multiply(w, cos_similarity), bias)
-    
+
     return scaled_cos_similarity
 """
 

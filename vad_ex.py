@@ -2,7 +2,7 @@ import collections
 import contextlib
 import sys
 import wave
-#from pydub import AudioSegment
+from pydub import AudioSegment
 import webrtcvad
 
 # Modified https://github.com/wiseman/py-webrtcvad/blob/master/example.py

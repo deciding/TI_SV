@@ -21,6 +21,7 @@ def main():
     # Saving Checkpoints, Data... etc
     parser.add_argument("--max_step", type=int, default=500000, help="maximum steps in training")
     parser.add_argument("--checkpoint_freq", type=int, default=100, help="how often save checkpoint")
+    parser.add_argument("--eval_freq", type=int, default=1000, help="how often do the evaluation")
 
     # Data
     parser.add_argument("--segment_length", type=float, default=1.6, help="segment length in seconds")
@@ -51,12 +52,13 @@ def main():
 
     # Scaled Cosine similarity
     parser.add_argument("--scale_clip", type=float, default=0.01, help="Gradient scale for scale values in scaled cosine similarity")
-    
+
     # Collect hparams
     args = parser.parse_args()
 
     # Set up Queue
     global_queue = queue.Queue()
+    eval_queue = queue.Queue()
     # Set up Feeder
     libri_feeder = Feeder(args, "libri")
     libri_feeder.set_up_feeder(global_queue)
@@ -64,27 +66,29 @@ def main():
     vox1_feeder = Feeder(args, "vox1")
     vox1_feeder.set_up_feeder(global_queue)
 
-    vox2_feeder = Feeder(args,"vox2")
+    vox2_feeder = Feeder(args, "vox2")
     vox2_feeder.set_up_feeder(global_queue)
+
+    eval_feeder = Feeder(args, "eval")
+    eval_feeder.set_up_feeder(eval_queue)
 
     # Set up Model
 
     model = GE2E(args)
     graph = model.set_up_model()
-    
+
     # Training
     with graph.as_default():
         saver = tf.train.Saver()
 
     with tf.Session(graph=graph) as sess:
-        
         train_writer = tf.summary.FileWriter(args.ckpt_dir, sess.graph)
         ckpt = tf.train.get_checkpoint_state(args.ckpt_dir)
         if ckpt and tf.train.checkpoint_exists(ckpt.model_checkpoint_path):
             print('Restoring Variables from {}'.format(ckpt.model_checkpoint_path))
             saver.restore(sess, ckpt.model_checkpoint_path)
             start_step = sess.run(model.global_step)
-        
+
         else:
             print('start from 0')
             init_op = tf.global_variables_initializer()
@@ -94,20 +98,24 @@ def main():
         for num_step in range(start_step, args.max_step + 1):
 
             print("current step: " + str(num_step) + "th step")
-        
+
             batch = global_queue.get()
-            
-            summary, training_loss, _ = sess.run([model.sim_mat_summary, model.total_loss, model.optimize], feed_dict={model.input_batch: batch[0], model.target_batch : batch[1]})
-            train_writer.add_summary(summary, num_step)
+
+            sim_mat_summary, training_loss_summary, training_loss, _ = sess.run([model.sim_mat_summary, model.total_loss_summary, model.total_loss, model.optimize], feed_dict={model.input_batch: batch[0], model.target_batch : batch[1]})
+            train_writer.add_summary(sim_mat_summary, num_step)
+            train_writer.add_summary(training_loss_summary, num_step)
             print("batch loss:" + str(training_loss))
 
             if num_step % args.checkpoint_freq == 0:
                 save_path = saver.save(sess, args.ckpt_dir+"/model.ckpt", global_step=model.global_step)
                 print("model saved in file: %s / %d th step" % (save_path, sess.run(model.global_step)))
-                        
 
+            if num_step % args.eval_freq == 0:
+                batch = eval_queue.get()
+                eval_summary, eval_loss_summary, eval_loss = sess.run([model.eval_sim_mat_summary, model.eval_total_loss_summary, model.eval_total_loss], feed_dict={model.input_batch: batch[0], model.target_batch : batch[1]})
+                train_writer.add_summary(eval_sim_mat_summary, num_step)
+                train_writer.add_summary(eval_loss_summary, num_step)
 
 if __name__ == "__main__":
     main()
-
 

@@ -23,7 +23,6 @@ vox1_dev_wav - id #### - 0DOmwbPlPvY - 00001.wav
                                      - ...
                        - 5VNK93duiOM
                        - ...
-                       
              - id #### - ...
 
 """
@@ -33,13 +32,16 @@ class Preprocess():
         # Set hparams
         self.hparams = hparams
         self.data_type = data_type
+        os.mkdir(self.hparams.pk_dir + "/" + self.data_type)
 
         # Start Process
-        start_new_thread(self.preprocess_data(), ())
+        self.preprocess_data()
+        #start_new_thread(self.preprocess_data, ())
 
     def preprocess_data(self):
-        if self.data_type == "libri":
-            path_list = glob.iglob(self.hparams.in_dir.rstrip("/")+"/*/*.wav")
+        if "libri" in self.data_type:
+            path_list = glob.iglob(self.hparams.in_dir.rstrip("/")+"/*/Wave/*.wav")
+            #path_list = glob.iglob(self.hparams.in_dir.rstrip("/")+"/*/*.wav")
         elif self.data_type == "vox1":
             path_list = glob.iglob(self.hparams.in_dir.rstrip("/")+"/*/*/*.wav")
         elif self.data_type == "vox2":
@@ -57,7 +59,7 @@ class Preprocess():
             audio, sample_rate = vad_ex.read_wave(path)
         elif self.data_type == "vox2":
             audio, sample_rate = vad_ex.read_m4a(path)
-        elif self.data_type == "libri":
+        elif "libri" in self.data_type:
             audio, sample_rate = vad_ex.read_libri(path)
         vad = webrtcvad.Vad(1)
         frames = vad_ex.frame_generator(30, audio, sample_rate)
@@ -73,26 +75,28 @@ class Preprocess():
         return wav_arr, sample_rate
 
     def create_pickle(self, path, wav_arr, sample_rate):
-        os.mkdir(self.hparams.pk_dir + "/" + self.data_type)
         if round((wav_arr.shape[0] / sample_rate), 1) > self.hparams.segment_length:
             save_dict = {};
             logmel_feats = logfbank(wav_arr, samplerate=sample_rate, nfilt=self.hparams.spectrogram_scale)
             print("created logmel feats from audio data. np array of shape:"+str(logmel_feats.shape))
             save_dict["LogMel_Features"] = logmel_feats;
 
-            if self.data_type == ("vox1" or "vox2"):
-            	data_id = "_".join(path.split("/")[-3:])
-            	save_dict["SpkId"] = path.split("/")[-3]
-            	save_dict["ClipId"] = path.split("/")[-2]
-            	save_dict["WavId"] = path.split("/")[-1]
-            	if self.data_type == "vox1":
-            	    pickle_f_name = data_id.replace("wav", "pickle")
-            	elif self.data_type == "vox2":
-            	    pickle_f_name = data_id.replace("m4a", "pickle")
+            if self.data_type == "vox1" or self.data_type == "vox2":
+                data_id = "_".join(path.split("/")[-3:])
+                save_dict["spkid"] = path.split("/")[-3]
+                save_dict["clipid"] = path.split("/")[-2]
+                save_dict["wavid"] = path.split("/")[-1]
+                if self.data_type == "vox1":
+                    pickle_f_name = data_id.replace("wav", "pickle")
+                elif self.data_type == "vox2":
+                    pickle_f_name = data_id.replace("m4a", "pickle")
 
-            elif self.data_type == "libri":
-                data_id = "_".join(path.split("/")[-2:])
-                save_dict["SpkId"] = path.split("/")[-2]
+            elif "libri" in self.data_type:
+                #data_id = "_".join(path.split("/")[-2:])
+                #save_dict["SpkId"] = path.split("/")[-2]
+                #save_dict["WavId"] = path.split("/")[-1]
+                data_id = "_".join(path.split("/")[-3::2])
+                save_dict["SpkId"] = path.split("/")[-3]
                 save_dict["WavId"] = path.split("/")[-1]
                 pickle_f_name = data_id.replace("wav", "pickle")
                 print(pickle_f_name)
@@ -123,25 +127,22 @@ def main():
 
     # try to make pickle directory.
     try:
-    	os.mkdir(args.pk_dir)
-    	print("pickle directory created.")
+        os.mkdir(args.pk_dir)
+        print("pickle directory created.")
     except FileExistsError:
-    	print("wavs_pickle already exists.")
+        print("wavs_pickle already exists.")
     except:
-    	print("Unexpected Error:", sys.exc_info()[0])
+        print("Unexpected Error:", sys.exc_info()[0])
 
 
-    libri_preprocess = Preprocess(args, "libri")
+    libri_preprocess = Preprocess(args, "libritest")
     #libri_preprocess.preprocess_data()
 
-    vox1_preprocess = Preprocess(args, "vox1")
+    #vox1_preprocess = Preprocess(args, "vox1")
     #vox1_preprocess.preprocess_data()
 
-    vox2_preprocess = Preprocess(args, "vox2")
+    #vox2_preprocess = Preprocess(args, "vox2")
     #vox2_preprocess.preprocess_data()
-    
-
-
 
 if __name__ == "__main__":
     main()
