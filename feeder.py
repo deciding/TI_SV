@@ -1,19 +1,20 @@
-import tensorflow as tf
+#import tensorflow as tf
 import numpy as np
 import time
 from _thread import start_new_thread
-import queue
+#import queue
 import vad_ex
 from python_speech_features import logfbank
-import utils
+#import utils
 import re
 import os
 import random
 import pickle
-import glob
-import sys
+#import glob
+#import sys
 import webrtcvad
 import argparse
+from collections import deque
 
 
 """
@@ -36,10 +37,10 @@ class Feeder():
             assert data_type != None
             self.data_type = data_type
 
-        if "eval" in data_type:
-            self.mode = "eval"
-        else:
-            self.mode = "normal"
+            if "eval" in data_type:
+                self.mode = "eval"
+            else:
+                self.mode = "normal"
 
         # 나중에 좀 더 다양한 데이터를 input으로 받아서 process할 수 있도록 하는 부분 추가
     def set_up_feeder(self, queue=None):
@@ -57,6 +58,10 @@ class Feeder():
         elif self.hparams.mode == "infer":
             #save_dict for saving mel spectrograms of two waves
             self.save_dict = {};
+            self.dq=deque()
+            self.dq_size=0
+            self.bad_cnt=0
+            self.cnt=0
 
         elif self.hparams.mode == "test":
             pass
@@ -150,8 +155,9 @@ class Feeder():
         # for ex) /home/hdd2tb/ninas96211/dev_wav_set/id10343_pCDWKHjQjso_00002.wav
 
         #wavs_list = [self.hparams.in_wav1, self.hparams.in_wav2]
+        #import pdb;pdb.set_trace()
         wavs_list = [self.hparams.in_wav1]
-        print(wavs_list)
+        #print(wavs_list)
 
         # file_name for ex) id10343_pCDWKHjQjso_00002
         for wav_path in wavs_list:
@@ -170,6 +176,7 @@ class Feeder():
             wav_arr = np.frombuffer(total_wav, dtype=np.int16)
             if len(wav_arr) == 0:
                 return [],[],False
+            wav_arr = np.pad(wav_arr, (0, max(0, 25840-len(wav_arr))), 'constant', constant_values=(0, 0))
             #print("read audio data from byte string. np array of shape:"+str(wav_arr.shape))
             logmel_feats = logfbank(wav_arr, samplerate=sample_rate, nfilt=40)
             # file_name for ex, 'id10343_pCDWKHjQjso_00002'
@@ -212,6 +219,87 @@ class Feeder():
         #return wav1_data, wav2_data, match
         return wav1_data, None, match
 
+    def libri_spkid_outpath(self, wav_path):
+        filename=os.path.splitext(wav_path)[0]
+        names=filename.split('/')[-3::2]
+        out_suffix=names[0]
+        out_dir='%s/%s' % (self.hparams.out_dir, out_suffix)
+        filename=names[1]
+        if not os.path.exists(out_dir):
+            os.makedirs(out_dir)
+        return '%s/%s.npy' % (out_dir, filename)
+
+    def infer_batch_generator(self):
+        #import pdb;pdb.set_trace()
+        batch_size=640
+        wavs_list = self.hparams.in_wav1
+        for wav_path in wavs_list:
+            # Get voiced wav_arr
+            if self.hparams.dataset == 'libri':
+                out_path=self.libri_spkid_outpath(wav_path)
+            else:
+                out_path=''
+            audio, sample_rate = vad_ex.read_wave(wav_path)
+            vad = webrtcvad.Vad(1)
+            frames = vad_ex.frame_generator(30, audio, sample_rate)
+            frames = list(frames)
+            segments = vad_ex.vad_collector(sample_rate, 30, 300, vad, frames)
+            total_wav = b""
+            for i, segment in enumerate(segments):
+                total_wav += segment
+            wav_arr = np.frombuffer(total_wav, dtype=np.int16)
+            if len(wav_arr) == 0:
+                continue
+            # Pad when less than 1.6s
+            wav_arr = np.pad(wav_arr, (0, max(0,25840-len(wav_arr))), 'constant', constant_values=(0, 0))
+            # Get logmel
+            logmel_feats = logfbank(wav_arr, samplerate=sample_rate, nfilt=40)
+
+            # Get fixed length log mels
+            num_frames = self.hparams.segment_length * 100
+            num_overlap_frames = num_frames * self.hparams.overlap_ratio
+            total_len = logmel_feats.shape[0]
+            num_fix_len_mels = int((total_len - num_overlap_frames) // (num_frames - num_overlap_frames))
+            fix_len_mels = []
+            for mel_idx in range(num_fix_len_mels):
+                start_idx = int((num_frames - num_overlap_frames) * mel_idx)
+                end_idx = int(start_idx + num_frames)
+                fix_len_mels.append(logmel_feats[start_idx:end_idx, :])
+            fix_len_mels = np.asarray(fix_len_mels)
+
+            # Queue and pop every 640
+            for fix_len_mel in fix_len_mels:
+                last_item=(fix_len_mel, out_path)
+                self.dq.append(last_item)
+                self.dq_size += 1
+            if len(fix_len_mels) == 0:
+                self.bad_cnt += 1
+            self.cnt+=1
+            if self.dq_size>=batch_size:
+                res=[]
+                for i in range(batch_size):
+                    res.append(self.dq.popleft())
+                    self.dq_size -= 1
+                yield res
+
+        # When remains a lot of 640 clusters
+        while self.dq_size>=batch_size:
+            res=[]
+            for i in range(batch_size):
+                res.append(self.dq.popleft())
+                self.dq_size -= 1
+            yield res
+        # the last remaining cluster, if mod 640 ==0, append dummy 640 logmels
+        res=[]
+        while self.dq_size>0:
+            res.append(self.dq.popleft())
+            self.dq_size -= 1
+        for i in range(batch_size-len(res)):
+            res.append(last_item)
+        yield res
+
+    def get_bad_rate(self):
+        return self.bad_cnt/self.cnt, self.bad_cnt, self.cnt
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

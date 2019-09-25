@@ -1,13 +1,19 @@
+import time
 import tensorflow as tf
 from model import GE2E
 import numpy as np
 import argparse
-import utils
+#import utils
 from feeder import Feeder
-from numpy import dot
-from numpy.linalg import norm
+#from numpy import dot
+#from numpy.linalg import norm
 import glob
 import os
+from tqdm import tqdm
+from queue import Queue
+from threading import Thread
+
+q=Queue()
 
 def main():
 
@@ -19,6 +25,9 @@ def main():
 
     # wav name formatting: id_clip_uttnum.wav
     parser.add_argument("--in_dir", type=str, required=True, help="input dir")
+    parser.add_argument("--out_dir", type=str, required=True, help="out dir")
+    parser.add_argument("--batch_inference", action="store_true", help="set whether to use the batch inference")
+    parser.add_argument("--dataset", type=str, default="libri", help="out dir")
     parser.add_argument("--in_wav1", type=str, help="input wav1 dir")
     parser.add_argument("--in_wav2", default="temp.wav", type=str, help="input wav2 dir")
     #/home/hdd2tb/ninas96211/dev_wav_set
@@ -42,7 +51,9 @@ def main():
     parser.add_argument("--num_lstm_stacks", type=int, default=3, help="number of LSTM stacks")
     parser.add_argument("--num_lstm_cells", type=int, default=768, help="number of LSTM cells")
     parser.add_argument("--dim_lstm_projection", type=int, default=256, help="dimension of LSTM projection")
-    parser.add_argument('--gpu', default=0,
+    parser.add_argument('--gpu', default='0',
+                        help='Path to model checkpoint')
+    parser.add_argument('--gpu_num', default=4,
                         help='Path to model checkpoint')
 
     # Collect hparams
@@ -58,10 +69,22 @@ def main():
     model = GE2E(args)
     graph = model.set_up_model()
 
-    # Training
-
+    #Training
     with graph.as_default():
         saver = tf.train.Saver()
+
+    #num_gpu=4
+    #sess_arr=[]
+    #for i in range(num_gpu):
+    #    gpu_options = tf.GPUOptions(visible_device_list=str(i))
+    #    sess_arr.append(tf.Session(graph=graph, config=tf.ConfigProto(gpu_options=gpu_options)))
+    #    saver.restore(sess_arr[i], args.ckpt_file)
+
+    #    t = Thread(target=worker)
+    #    t.daemon = True
+    #    t.start()
+
+    #    save_dvector_of_dir_parallel(sess_arr, feeder, model, args)
 
     with tf.Session(graph=graph) as sess:
         # restore from checkpoints
@@ -69,7 +92,15 @@ def main():
         saver.restore(sess, args.ckpt_file)
 
         #get_dvector_of_dir(sess, feeder, model, args)
-        save_dvector_of_dir(sess, feeder, model, args)
+
+        t = Thread(target=worker)
+        t.daemon = True
+        t.start()
+
+        #save_dvector_of_dir_parallel(sess, feeder, model, args)
+        save_dvector_of_dir_parallel_arr(sess, feeder, model, args)
+
+        #save_dvector_of_dir_libri(sess, feeder, model, args)
 
         #wav1_data, wav2_data, match = feeder.create_infer_batch()
 
@@ -93,26 +124,137 @@ def main():
 def rmse(predictions, targets):
     return np.sqrt(np.mean((predictions-targets)**2))
 
-def save_dvector_of_dir(sess, feeder, model, args):
+def save_dvector_of_dir_parallel_arr(sess, feeder, model, args):
+    #import pdb;pdb.set_trace()
     if args.in_dir.endswith('.wav'):
         in_wavs=[args.in_dir]
     else:
         in_wavs=glob.glob(args.in_dir + '/*.wav')
-    total_vectors=None
+    args.in_wav1=in_wavs
+
+    total_len=len(in_wavs)
+    cur_len=0
+
+    prev_path = '-'
+    start=time.time()
+    model_time=0
+    for fix_len_mel_path_batch in feeder.infer_batch_generator():
+        fix_len_mel_batch=[x[0] for x in fix_len_mel_path_batch]
+        path_batch=[x[1] for x in fix_len_mel_path_batch]
+        ss=time.time()
+        norm_out_batch_arr = sess.run(model.tower_norm_out, feed_dict={model.input_batch:fix_len_mel_batch})
+        norm_out_batch = []
+        for norm in norm_out_batch_arr:
+            norm_out_batch+=list(norm)
+        model_time+=(time.time()-ss)
+        for output in zip(norm_out_batch, path_batch):
+            cur_path=output[1]
+            if cur_path != prev_path:
+                cur_len += 1
+            prev_path=cur_path
+            q.put(output)
+        print("Progress: %.2f%%" % (cur_len/total_len*100), end='\r')
+
+    q.join()
+    print("\nElapsed: %.2f" % (time.time()-start))
+    print("\nModel: %.2f" % (model_time))
+    print(feeder.get_bad_rate())
+
+def save_dvector_of_dir_parallel(sess, feeder, model, args):
+    #import pdb;pdb.set_trace()
+    if args.in_dir.endswith('.wav'):
+        in_wavs=[args.in_dir]
+    else:
+        in_wavs=glob.glob(args.in_dir + '/*.wav')
+    args.in_wav1=in_wavs
+
+    total_len=len(in_wavs)
+    cur_len=0
+
+    prev_path = '-'
+    start=time.time()
+    model_time=0
+    generate_time=0
+    post_process_time=0
+    gg=time.time()
+    for fix_len_mel_path_batch in feeder.infer_batch_generator():
+        generate_time+=(time.time()-gg)
+        fix_len_mel_batch=[x[0] for x in fix_len_mel_path_batch]
+        path_batch=[x[1] for x in fix_len_mel_path_batch]
+        ss=time.time()
+        norm_out_batch = sess.run(model.norm_out, feed_dict={model.input_batch:fix_len_mel_batch})
+        model_time+=(time.time()-ss)
+        pp=time.time()
+        for output in zip(norm_out_batch, path_batch):
+            cur_path=output[1]
+            if cur_path != prev_path:
+                cur_len += 1
+            prev_path=cur_path
+            q.put(output)
+        post_process_time+=(time.time()-pp)
+        print("Progress: %.2f%%" % (cur_len/total_len*100), end='\r')
+        gg=time.time()
+
+    q.join()
+    print("\nElapsed: %.2f" % (time.time()-start))
+    print("Model: %.2f" % (model_time))
+    print("Generate: %.2f" % (generate_time))
+    print("Post Process: %.2f" % (post_process_time))
+    print(feeder.get_bad_rate())
+
+def flush_dvector_buf(dvec_buf, path):
+    dvector=np.mean(dvec_buf, axis=0)
+    np.save(path, dvector)
+
+def worker():
+    buf=[]
+    prev_path='-'# '-' means start, '' means end
+    while True:
+        item=q.get()
+        path=item[1]
+        if prev_path != '-' and path != prev_path:
+            flush_dvector_buf(buf, prev_path)
+        elif path != '':
+            buf.append(item[0])
+        else:
+            pass# mark task done for this item directly
+        q.task_done()
+
+def save_dvector_of_dir_libri(sess, feeder, model, args):
+    if args.in_dir.endswith('.wav'):
+        in_wavs=[args.in_dir]
+    else:
+        in_wavs=glob.glob(args.in_dir + '/*.wav')
+    #total_vectors=None
 
     #print(in_wavs)
-    small_sim_cnt=0
-    for in_wav1 in in_wavs:
+    #small_sim_cnt=0
+    bad_cnt = 0
+    cnt = 0
+    for in_wav1 in tqdm(in_wavs):
         args.in_wav1=in_wav1
         filename=os.path.splitext((in_wav1))[0]
-        print(filename)
+        #print(filename)
+        #import pdb;pdb.set_trace()
+        names=filename.split('/')[-3::2]
+        out_suffix=names[0]
+        out_dir='%s/%s' % (args.out_dir, out_suffix)
+        filename=names[1]
+        if not os.path.exists(out_dir):
+            os.makedirs(out_dir)
         wav1_data, wav2_data, match = feeder.create_infer_batch()
+        cnt += 1
         if len(wav1_data)==0:
+            bad_cnt += 1
+            #print(in_wav1)
             continue
+        #else:
+        #    continue
         wav1_out = sess.run(model.norm_out, feed_dict={model.input_batch:wav1_data})
         wav1_dvector = np.mean(wav1_out, axis=0)
 
-        np.save('%s.npy' % filename, wav1_dvector)
+        np.save('%s/%s.npy' % (out_dir, filename), wav1_dvector)
+    print(bad_cnt/cnt, bad_cnt, cnt)
 
 def get_dvector_of_dir(sess, feeder, model, args):
     if args.in_dir.endswith('.wav'):
@@ -122,7 +264,7 @@ def get_dvector_of_dir(sess, feeder, model, args):
     total_vectors=None
 
     #print(in_wavs)
-    small_sim_cnt=0
+    #small_sim_cnt=0
     for in_wav1 in in_wavs:
         args.in_wav1=in_wav1
         wav1_data, wav2_data, match = feeder.create_infer_batch()

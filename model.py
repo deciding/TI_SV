@@ -2,8 +2,8 @@
 # https://arxiv.org/abs/1710.10467
 
 import tensorflow as tf
-import argparse
-from tensorflow.python.layers import core as layers_core
+#import argparse
+#from tensorflow.python.layers import core as layers_core
 import utils
 import numpy as np
 import re
@@ -30,8 +30,11 @@ class GE2E():
                 self._optimize()
 
             elif self.hparams.mode == "infer":
-                self.input_batch = tf.placeholder(dtype=tf.float32, shape=[None, None, self.hparams.spectrogram_scale], name="input_batch")
-                self._create_embedding()
+                self.input_batch = tf.placeholder(dtype=tf.float32, shape=[640, None, self.hparams.spectrogram_scale], name="input_batch")
+                if self.hparams.batch_inference:
+                    self._create_embedding()
+                else:
+                    self._create_embedding_single()
 
             # test 부분 추가
 
@@ -44,6 +47,33 @@ class GE2E():
         return ge2e_graph
 
     def _create_embedding(self):
+        #start_gpu=int(self.hparams.gpu[0])
+        start_gpu=0
+        gpu_num=int(self.hparams.gpu_num)
+        tower_inputs=tf.split(self.input_batch, gpu_num)
+        gpus = ["/gpu:{}".format(i) for i in range(start_gpu, start_gpu+gpu_num)]
+        self.tower_norm_out=[]
+        for i in range(gpu_num):
+            with tf.device(tf.train.replica_device_setter(ps_tasks=1, ps_device="/cpu:0", worker_device=gpus[i])):
+                with tf.variable_scope("lstm_embedding", reuse=tf.AUTO_REUSE):
+                    # Create Embedding Using LSTM
+                    stacked_lstm = tf.nn.rnn_cell.MultiRNNCell([tf.nn.rnn_cell.LSTMCell(self.hparams.num_lstm_cells, num_proj=self.hparams.dim_lstm_projection) for _ in range(self.hparams.num_lstm_stacks)])
+                    # 
+                    # Create Initial State
+                    #init_state = stacked_lstm.zero_state(self.batch_size, dtype=tf.float32)
+                    # Decode Using dynamic_rnn
+                    # outputs is a tensor of [batch_size, total_frames, output_size]
+                    # output_size is self.hparams.dim_lstm_projection if num_proj in LSTMCell is set
+                    # state is a tensor of [batch_size, state_size of the cell]
+
+                    outputs, state = tf.nn.dynamic_rnn(cell=stacked_lstm, inputs=tower_inputs[i], dtype=tf.float32)
+
+                    # L2 Normalize the output of the last layer at the final frame
+                    # norm_out is a tensor of [batch_size, output_size], by default, [640, 256(proj_nodes)]
+                    norm_out = tf.nn.l2_normalize(outputs[:, -1, :], axis=-1)
+                    self.tower_norm_out.append(norm_out)
+
+    def _create_embedding_single(self):
         with tf.variable_scope("lstm_embedding"):
             # Create Embedding Using LSTM
             stacked_lstm = tf.nn.rnn_cell.MultiRNNCell([tf.nn.rnn_cell.LSTMCell(self.hparams.num_lstm_cells, num_proj=self.hparams.dim_lstm_projection) for _ in range(self.hparams.num_lstm_stacks)])
