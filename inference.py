@@ -13,7 +13,10 @@ from tqdm import tqdm
 from queue import Queue
 from threading import Thread
 
+#python inference.py --in_dir '/home/kailingtang/workspace/experiments/unseen/*/Wave' --out_dir spkid --ckpt xckpt/model.ckpt-58100 --gpu 7
+
 q=Queue()
+list_of_dvectorlist=[]
 
 def main():
 
@@ -96,11 +99,13 @@ def main():
         t = Thread(target=worker)
         t.daemon = True
         t.start()
+        save_dvector_of_dir_parallel(sess, feeder, model, args)
 
-        #save_dvector_of_dir_parallel(sess, feeder, model, args)
-        save_dvector_of_dir_parallel_arr(sess, feeder, model, args)
+        #save_dvector_of_dir_parallel_arr(sess, feeder, model, args) # for multigpu
 
         #save_dvector_of_dir_libri(sess, feeder, model, args)
+
+        #save_dvector_of_dir(sess, feeder, model, args)
 
         #wav1_data, wav2_data, match = feeder.create_infer_batch()
 
@@ -125,7 +130,6 @@ def rmse(predictions, targets):
     return np.sqrt(np.mean((predictions-targets)**2))
 
 def save_dvector_of_dir_parallel_arr(sess, feeder, model, args):
-    #import pdb;pdb.set_trace()
     if args.in_dir.endswith('.wav'):
         in_wavs=[args.in_dir]
     else:
@@ -161,7 +165,6 @@ def save_dvector_of_dir_parallel_arr(sess, feeder, model, args):
     print(feeder.get_bad_rate())
 
 def save_dvector_of_dir_parallel(sess, feeder, model, args):
-    #import pdb;pdb.set_trace()
     if args.in_dir.endswith('.wav'):
         in_wavs=[args.in_dir]
     else:
@@ -177,6 +180,11 @@ def save_dvector_of_dir_parallel(sess, feeder, model, args):
     generate_time=0
     post_process_time=0
     gg=time.time()
+    #abc=list(feeder.infer_batch_generator())
+    #cnt=0
+    #for fix_len_mel_path_batch in abc:
+    #    for mel, path in fix_len_mel_path_batch:
+
     for fix_len_mel_path_batch in feeder.infer_batch_generator():
         generate_time+=(time.time()-gg)
         fix_len_mel_batch=[x[0] for x in fix_len_mel_path_batch]
@@ -214,10 +222,13 @@ def worker():
         path=item[1]
         if prev_path != '-' and path != prev_path:
             flush_dvector_buf(buf, prev_path)
+            buf=[]
+            buf.append(item[0])
         elif path != '':
             buf.append(item[0])
         else:
             pass# mark task done for this item directly
+        prev_path=path
         q.task_done()
 
 def save_dvector_of_dir_libri(sess, feeder, model, args):
@@ -235,7 +246,6 @@ def save_dvector_of_dir_libri(sess, feeder, model, args):
         args.in_wav1=in_wav1
         filename=os.path.splitext((in_wav1))[0]
         #print(filename)
-        #import pdb;pdb.set_trace()
         names=filename.split('/')[-3::2]
         out_suffix=names[0]
         out_dir='%s/%s' % (args.out_dir, out_suffix)
@@ -255,6 +265,40 @@ def save_dvector_of_dir_libri(sess, feeder, model, args):
 
         np.save('%s/%s.npy' % (out_dir, filename), wav1_dvector)
     print(bad_cnt/cnt, bad_cnt, cnt)
+
+def save_dvector_of_dir(sess, feeder, model, args):
+    if args.in_dir.endswith('.wav'):
+        in_wavs=[args.in_dir]
+    else:
+        in_wavs=glob.glob(args.in_dir + '/*.wav')
+    #total_vectors=None
+
+    #print(in_wavs)
+    #small_sim_cnt=0
+    bad_cnt = 0
+    cnt = 0
+    for in_wav1 in tqdm(in_wavs):
+        args.in_wav1=in_wav1
+        filename=os.path.splitext((in_wav1))[0]
+        #print(filename)
+        names=filename.split('/')[-3::2]# Wave between spkid and filename
+        out_suffix=names[0]
+        out_dir='%s/%s' % (args.out_dir, out_suffix)
+        filename=names[1]
+        if not os.path.exists(out_dir):
+            os.makedirs(out_dir)
+        wav1_data, wav2_data, match = feeder.create_infer_batch()
+        cnt += 1
+        if len(wav1_data)==0:
+            bad_cnt += 1
+            #print(in_wav1)
+            continue
+        #else:
+        #    continue
+        wav1_out = sess.run(model.norm_out, feed_dict={model.input_batch:wav1_data})
+        wav1_dvector = np.mean(wav1_out, axis=0)
+
+        np.save('%s/%s.npy' % (out_dir, filename), wav1_dvector)
 
 def get_dvector_of_dir(sess, feeder, model, args):
     if args.in_dir.endswith('.wav'):

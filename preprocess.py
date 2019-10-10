@@ -46,6 +46,10 @@ class Preprocess():
             path_list = glob.iglob(self.hparams.in_dir.rstrip("/")+"/*/*/*.wav")
         elif self.data_type == "vox2":
             path_list = glob.iglob(self.hparams.in_dir.rstrip("/")+"/*/*/*.m4a")
+        elif self.data_type == "emotional_actors":
+            path_list = glob.iglob(self.hparams.in_dir.rstrip("/")+"/*/*.wav")
+        elif self.data_type == "darpa_timit":
+            path_list = glob.iglob(self.hparams.in_dir.rstrip("/")+"/*/*/*.wav")
         else:
             raise ValueError("data type not supported")
         for path in path_list:
@@ -61,6 +65,10 @@ class Preprocess():
             audio, sample_rate = vad_ex.read_m4a(path)
         elif "libri" in self.data_type:
             audio, sample_rate = vad_ex.read_libri(path)
+        elif self.data_type == "emotional_actors":
+            audio, sample_rate = vad_ex.read_wave(path)
+        elif self.data_type == "darpa_timit":
+            audio, sample_rate = vad_ex.read_wave(path)
         vad = webrtcvad.Vad(1)
         frames = vad_ex.frame_generator(30, audio, sample_rate)
         frames = list(frames)
@@ -100,7 +108,17 @@ class Preprocess():
                 save_dict["WavId"] = path.split("/")[-1]
                 pickle_f_name = data_id.replace("wav", "pickle")
                 print(pickle_f_name)
-
+            elif self.data_type == "emotional_actors":
+                data_id ="emotional_"+ ("_".join(path.split("/")[-2:]))
+                save_dict["SpkId"] = path.split("/")[-2]
+                save_dict["WavId"] = path.split("/")[-1]
+                pickle_f_name = data_id.replace("wav", "pickle")
+            elif self.data_type == "darpa_timit":
+                name = ".".join(path.split("/")[-1].split(".")[-3::2])
+                data_id = "darpa_timit_" + path.split("/")[-2] +"_"+name
+                save_dict["SpkId"] = path.split("/")[-2]
+                save_dict["WavId"] = path.split("/")[-1]
+                pickle_f_name = data_id.replace("wav","pickle")
             with open(self.hparams.pk_dir + "/" + self.data_type + "/" + pickle_f_name, "wb") as f:
                 pickle.dump(save_dict, f, protocol=3);
         else:
@@ -134,8 +152,9 @@ def main():
     except:
         print("Unexpected Error:", sys.exc_info()[0])
 
-
-    libri_preprocess = Preprocess(args, "libritest")
+    darpa_timit_preprocess = Preprocess(args, "darpa_timit")
+    #emotional_actors_preprocess = Preprocess(args, "emotional_actors")
+    #libri_preprocess = Preprocess(args, "libritest")
     #libri_preprocess.preprocess_data()
 
     #vox1_preprocess = Preprocess(args, "vox1")

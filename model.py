@@ -25,14 +25,14 @@ class GE2E():
                 # Target Batch of [N*M(batch_size)]
                 self.input_batch = tf.placeholder(dtype=tf.float32, shape=[None, None, self.hparams.spectrogram_scale], name="input_batch")
                 self.target_batch = tf.placeholder(dtype=tf.int32, shape=[None], name="target_batch")
-                self._create_embedding()
+                self._create_embedding_single()
                 self._cal_loss()
                 self._optimize()
 
             elif self.hparams.mode == "infer":
-                self.input_batch = tf.placeholder(dtype=tf.float32, shape=[640, None, self.hparams.spectrogram_scale], name="input_batch")
+                self.input_batch = tf.placeholder(dtype=tf.float32, shape=[None, None, self.hparams.spectrogram_scale], name="input_batch")
                 if self.hparams.batch_inference:
-                    self._create_embedding()
+                    self._create_embedding_batch()
                 else:
                     self._create_embedding_single()
 
@@ -46,7 +46,7 @@ class GE2E():
 
         return ge2e_graph
 
-    def _create_embedding(self):
+    def _create_embedding_batch(self):
         #start_gpu=int(self.hparams.gpu[0])
         start_gpu=0
         gpu_num=int(self.hparams.gpu_num)
@@ -74,22 +74,25 @@ class GE2E():
                     self.tower_norm_out.append(norm_out)
 
     def _create_embedding_single(self):
-        with tf.variable_scope("lstm_embedding"):
-            # Create Embedding Using LSTM
-            stacked_lstm = tf.nn.rnn_cell.MultiRNNCell([tf.nn.rnn_cell.LSTMCell(self.hparams.num_lstm_cells, num_proj=self.hparams.dim_lstm_projection) for _ in range(self.hparams.num_lstm_stacks)])
-            # 
-            # Create Initial State
-            #init_state = stacked_lstm.zero_state(self.batch_size, dtype=tf.float32)
-            # Decode Using dynamic_rnn
-            # outputs is a tensor of [batch_size, total_frames, output_size]
-            # output_size is self.hparams.dim_lstm_projection if num_proj in LSTMCell is set
-            # state is a tensor of [batch_size, state_size of the cell]
+        with tf.device('/gpu:0'):
+            with tf.variable_scope("lstm_embedding"):
+                # Create Embedding Using LSTM
+                stacked_lstm = tf.nn.rnn_cell.MultiRNNCell([tf.nn.rnn_cell.LSTMCell(self.hparams.num_lstm_cells, num_proj=self.hparams.dim_lstm_projection) for _ in range(self.hparams.num_lstm_stacks)])
+                # 
+                # Create Initial State
+                #init_state = stacked_lstm.zero_state(self.batch_size, dtype=tf.float32)
+                # Decode Using dynamic_rnn
+                # outputs is a tensor of [batch_size, total_frames, output_size]
+                # output_size is self.hparams.dim_lstm_projection if num_proj in LSTMCell is set
+                # state is a tensor of [batch_size, state_size of the cell]
 
-            outputs, state = tf.nn.dynamic_rnn(cell=stacked_lstm, inputs=self.input_batch, dtype=tf.float32)
+                outputs, state = tf.nn.dynamic_rnn(cell=stacked_lstm, inputs=self.input_batch, dtype=tf.float32)
+                #print_outputs=tf.print("device of outputs:", outputs.device)
 
-            # L2 Normalize the output of the last layer at the final frame
-            # norm_out is a tensor of [batch_size, output_size], by default, [640, 256(proj_nodes)]
-            self.norm_out = tf.nn.l2_normalize(outputs[:, -1, :], axis=-1)
+                # L2 Normalize the output of the last layer at the final frame
+                # norm_out is a tensor of [batch_size, output_size], by default, [640, 256(proj_nodes)]
+                #with tf.control_dependencies([print_outputs]):
+                self.norm_out = tf.nn.l2_normalize(outputs[:, -1, :], axis=-1)
 
     def _cal_centroid_matrix(self, utt_idx):
         # centroid_idx counts from 0 to 63
@@ -125,47 +128,49 @@ class GE2E():
         return sim_per_utt
 
     def _cal_loss(self):
-        with tf.variable_scope("loss"):
-            # utt_idx // num_utt_per_batch(10) => true idx of sim_mat columns
-            # 텐플은 matrix 연산에 최적화되어있어서, 텐플에서 제공하는matrix 연산(c로 연산됨)을 파이썬 for loop으로 하면 대박느려짐
-            # sim_mat 구할 때도 그런 문제가 있어서 코드를 전면 수정했고
-            # cal_loss 도 수정해야하는데 약간 까다로움 
-            # train 에서 옵션을 받아서 loss를 2가지로 받을 수 있도록 (현재는 contrast loss만 구현)
+        with tf.device('/gpu:0'):
+            with tf.variable_scope("loss"):
+                # utt_idx // num_utt_per_batch(10) => true idx of sim_mat columns
+                # 텐플은 matrix 연산에 최적화되어있어서, 텐플에서 제공하는matrix 연산(c로 연산됨)을 파이썬 for loop으로 하면 대박느려짐
+                # sim_mat 구할 때도 그런 문제가 있어서 코드를 전면 수정했고
+                # cal_loss 도 수정해야하는데 약간 까다로움 
+                # train 에서 옵션을 받아서 loss를 2가지로 받을 수 있도록 (현재는 contrast loss만 구현)
 
-            if self.hparams.loss_type == "softmax":
-                # sim_mat has shape of [batch_size, num_spk]
-                self.sim_mat = tf.convert_to_tensor(tf.map_fn(self._create_sim_per_utt, tf.range(self.batch_size),dtype=tf.float32))
-                self.sim_mat_summary = tf.summary.image("sim_mat", tf.reshape(self.sim_mat,[1, self.batch_size, self.hparams.num_spk_per_batch, 1]))
-                self.eval_sim_mat_summary = tf.summary.image("eval_sim_mat", tf.reshape(self.sim_mat,[1, self.batch_size, self.hparams.num_spk_per_batch, 1]))
-                self.total_loss = tf.divide(tf.reduce_sum(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.sim_mat, labels=self.target_batch)), self.batch_size)
-                self.eval_total_loss = tf.divide(tf.reduce_sum(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.sim_mat, labels=self.target_batch)), self.batch_size)
+                if self.hparams.loss_type == "softmax":
+                    # sim_mat has shape of [batch_size, num_spk]
+                    self.sim_mat = tf.convert_to_tensor(tf.map_fn(self._create_sim_per_utt, tf.range(self.batch_size),dtype=tf.float32))
+                    self.sim_mat_summary = tf.summary.image("sim_mat", tf.reshape(self.sim_mat,[1, self.batch_size, self.hparams.num_spk_per_batch, 1]))
+                    self.eval_sim_mat_summary = tf.summary.image("eval_sim_mat", tf.reshape(self.sim_mat,[1, self.batch_size, self.hparams.num_spk_per_batch, 1]))
+                    self.total_loss = tf.divide(tf.reduce_sum(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.sim_mat, labels=self.target_batch)), self.batch_size)
+                    self.eval_total_loss = tf.divide(tf.reduce_sum(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.sim_mat, labels=self.target_batch)), self.batch_size)
 
-                self.total_loss_summary = tf.summary.scalar("loss", self.total_loss)
-                self.eval_total_loss_summary = tf.summary.scalar("eval_loss", self.eval_total_loss)
+                    self.total_loss_summary = tf.summary.scalar("loss", self.total_loss)
+                    self.eval_total_loss_summary = tf.summary.scalar("eval_loss", self.eval_total_loss)
 
-            elif self.hparams.loss_type == "contrast":
-                pass
+                elif self.hparams.loss_type == "contrast":
+                    pass
 
-            else:
-                print("Loss type not supported")
+                else:
+                    print("Loss type not supported")
 
     def _optimize(self):
-        with tf.variable_scope("optimize"):
-            self.global_step = tf.Variable(0, dtype=tf.int32, trainable=False, name='global_step')
-            learning_rate = tf.train.exponential_decay(self.hparams.learning_rate, self.global_step,
-                                       30000000, 0.5, staircase=True)
-            optimizer = tf.train.GradientDescentOptimizer(learning_rate)
-            grads_and_vars = optimizer.compute_gradients(self.total_loss)
+        with tf.device('/gpu:0'):
+            with tf.variable_scope("optimize"):
+                self.global_step = tf.Variable(0, dtype=tf.int32, trainable=False, name='global_step')
+                learning_rate = tf.train.exponential_decay(self.hparams.learning_rate, self.global_step,
+                                           30000000, 0.5, staircase=True)
+                optimizer = tf.train.GradientDescentOptimizer(learning_rate)
+                grads_and_vars = optimizer.compute_gradients(self.total_loss)
 
-            clipped_grad_and_vars = []
-            for grad, var in grads_and_vars:
-                if re.search("cos_params", var.name):
-                    grad = tf.clip_by_value(grad, -self.hparams.scale_clip, self.hparams.scale_clip)
-                elif re.search("projection", var.name):
-                    grad = tf.clip_by_value(grad, -self.hparams.lstm_proj_clip, self.hparams.lstm_proj_clip)
-                else:
-                    grad = tf.clip_by_norm(grad, self.hparams.l2_norm_clip)
-                clipped_grad_and_vars.append((grad, var))
+                clipped_grad_and_vars = []
+                for grad, var in grads_and_vars:
+                    if re.search("cos_params", var.name):
+                        grad = tf.clip_by_value(grad, -self.hparams.scale_clip, self.hparams.scale_clip)
+                    elif re.search("projection", var.name):
+                        grad = tf.clip_by_value(grad, -self.hparams.lstm_proj_clip, self.hparams.lstm_proj_clip)
+                    else:
+                        grad = tf.clip_by_norm(grad, self.hparams.l2_norm_clip)
+                    clipped_grad_and_vars.append((grad, var))
 
-            self.optimize = optimizer.apply_gradients(clipped_grad_and_vars, global_step=self.global_step)
+                self.optimize = optimizer.apply_gradients(clipped_grad_and_vars, global_step=self.global_step)
 

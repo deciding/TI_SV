@@ -27,10 +27,12 @@ def tf_scaled_cosine_similarity(a, b):
     cos_similarity = tf.reshape(tf.matmul(normalize_a, normalize_b),[-1]) # [1,64] to [64]
 
     # w is always positive
-    with tf.variable_scope("cos_params"):
+    with tf.variable_scope("cos_params", reuse=tf.AUTO_REUSE):
         w = tf.Variable(10.0, name="scale_weight")
         bias = tf.Variable(-5.0, name="scale_bias")
-        tf.assign(w, tf.clip_by_value(w, 0.0, 1000.0))
+        # for mirror strategy we need to specify aggregation method for all variable assignments, for this cliped value, since this weight should be same for all gpus, thus I just simply use the averge aggregation method, I didn't change the original author's method to pass tensor(instead of assign a variable), that's bcoz I still want to train based on the old ckpt.
+        #tf.assign(w, tf.clip_by_value(w, 0.0, 1000.0))
+        w=tf.clip_by_value(w, 0.0, 1000.0)
 
     # scaled cosine similarity
     scaled_cos_similarity = tf.add(tf.multiply(w, cos_similarity), bias)

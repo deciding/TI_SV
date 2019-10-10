@@ -83,7 +83,7 @@ class Feeder():
 
     def is_invalid_spk(self, spk_id):
         # check if each speaker has more than at least self.hparams.num_utt_per_batch utterances
-        spk_utt = [1 for pickle in self.pickles if re.search(spk_id, pickle)]
+        spk_utt = [1 for pickle in self.pickles if re.search(spk_id+'_', pickle)]
         num_utt = sum(spk_utt)
         if num_utt < self.hparams.num_utt_per_batch:
             return True
@@ -127,7 +127,8 @@ class Feeder():
             num_pickle_per_speaker = len(speaker_pickle_files_list)
 
             # list of indices in speaker_pickle_files_list: random with replacement
-            utt_idx_list = random.choices(range(num_pickle_per_speaker), k=self.hparams.num_utt_per_batch)
+            #utt_idx_list = random.choices(range(num_pickle_per_speaker), k=self.hparams.num_utt_per_batch)
+            utt_idx_list = random.sample(range(num_pickle_per_speaker), k=self.hparams.num_utt_per_batch)
             #print("utt_idx_list for " +str(spk_id)+" is " + str(utt_idx_list))
             for utt_idx in utt_idx_list:
                 utt_pickle = speaker_pickle_files_list[utt_idx]
@@ -294,9 +295,19 @@ class Feeder():
         while self.dq_size>0:
             res.append(self.dq.popleft())
             self.dq_size -= 1
-        for i in range(batch_size-len(res)):
-            res.append(last_item)
-        yield res
+        remaining = (batch_size - len(res))
+        last_item = (last_item[0], '')
+        if remaining != 0:
+            for i in range(remaining):
+                res.append(last_item)
+            yield res
+        else:
+            yield res
+            res=[]
+            for i in range(batch_size):
+                res.append(last_item)
+            yield res
+
 
     def get_bad_rate(self):
         return self.bad_cnt/self.cnt, self.bad_cnt, self.cnt
