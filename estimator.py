@@ -3,7 +3,7 @@ import vad_ex
 from python_speech_features import logfbank
 import tensorflow as tf
 import numpy as np
-import functools
+#import functools
 import re
 import os
 import random
@@ -11,6 +11,8 @@ import pickle
 import argparse
 from glob import glob
 from tqdm import tqdm
+
+single_predict=False
 
 #python estimator.py --in_dir ../datasets/tisv_pickles/ --ckpt test/ --gpu_str 4
 #python estimator.py --in_dir ../experiments/unseen/ --out_dir new-spkid --ckpt test/ --gpu_str 7 --mode infer
@@ -154,6 +156,9 @@ class Trainer:
         self.num_frames = int(self.hparams.segment_length * 100)
         #self.gpu_num = len(self.hparams.gpu_str.split(','))
         self.gpu_num = 1
+        self.keys=[]
+        self.vals=[]
+        self.fix_mel_lengths=[]
 
     def get_save_path_from_filename(self, wav_file):
         path_fields=wav_file.split('/')
@@ -196,9 +201,45 @@ class Trainer:
             tower_target_batch=np.concatenate(tower_target_batch, axis=0)
             return tower_in_batch, tower_target_batch
 
-        def create_infer_batch(wavs_list):
+        def generate_infer_batch():
+            num_frames = self.hparams.segment_length * 100
+            num_overlap_frames = num_frames * self.hparams.overlap_ratio
+
+            for wav_path in tqdm(self.wav_list):
+                #wav_id = os.path.splitext(os.path.basename(wav_path))[0]
+                wav_id = self.get_save_path_from_filename(wav_path)
+                audio, sample_rate = vad_ex.read_wave(wav_path)
+                vad = webrtcvad.Vad(1)
+                frames = vad_ex.frame_generator(30, audio, sample_rate)
+                frames = list(frames)
+                # following line may cause empty output, too many unvoiced in buffer
+                segments = vad_ex.vad_collector(sample_rate, 30, 300, vad, frames)
+                total_wav = b""
+                for i, segment in enumerate(segments):
+                    total_wav += segment
+                wav_arr = np.frombuffer(total_wav, dtype=np.int16)
+                if len(wav_arr) == 0:
+                    #return [],[],False
+                    continue
+                wav_arr = np.pad(wav_arr, (0, max(0, 25840-len(wav_arr))), 'constant', constant_values=(0, 0))
+                logmel_feats = logfbank(wav_arr, samplerate=sample_rate, nfilt=40)
+
+                total_len = logmel_feats.shape[0]
+                num_fix_mels = int((total_len - num_overlap_frames) // (num_frames - num_overlap_frames))
+                fix_mels = []
+                for dvec_idx in range(num_fix_mels):
+                    start_idx = int((num_frames - num_overlap_frames) * dvec_idx)
+                    end_idx = int(start_idx + num_frames)
+                    fix_mels.append(logmel_feats[start_idx:end_idx, :])
+                fix_mels = np.asarray(fix_mels)
+                self.keys.append(wav_id)
+                self.fix_mel_lengths.append(len(fix_mels))
+                for fix_mel in fix_mels:
+                    yield fix_mel
+
+        def create_infer_batch(wav_list):
             self.save_dict = {}
-            for wav_path in wavs_list:
+            for wav_path in wav_list:
                 #wav_id = os.path.splitext(os.path.basename(wav_path))[0]
                 wav_id = self.get_save_path_from_filename(wav_path)
                 audio, sample_rate = vad_ex.read_wave(wav_path)
@@ -292,19 +333,25 @@ class Trainer:
                 return dataset
 
             elif self.hparams.mode == 'infer':
-                self.fix_mel_dict = create_infer_batch(wav_files)
-                self.keys=[]
-                self.vals=[]
-                for key, val in self.fix_mel_dict.items():
-                    self.keys.append(key)
-                    self.vals.append(val)
-                self.fix_mel_lengths = [len(v) for v in self.vals]
-                flat_vals=[vv.tolist() for v in self.vals for vv in v]
-                # size of vals: [num_file, num_window, 160, 40]
-                # self.vals=[i.tolist() for i in self.vals]
-                #dataset = tf.data.Dataset.from_tensor_slices([self.vals[0].tolist()])
-                dataset = tf.data.Dataset.from_tensor_slices(flat_vals)
-                dataset = dataset.batch(self.gpu_num * self.hparams.num_spk_per_batch)
+                #===== single file per predict=====
+                if single_predict:
+                    self.fix_mel_dict = create_infer_batch(wav_files)
+                    for key, val in self.fix_mel_dict.items():
+                        self.keys.append(key)
+                        #self.vals.append(val)
+                    # size of vals: [num_file, num_window, 160, 40]
+                    # self.vals=[i.tolist() for i in self.vals]
+                    if len(val) == 0:
+                        return None
+                    else:
+                        dataset = tf.data.Dataset.from_tensor_slices([val.tolist()])
+                #===== multi file per predict=====
+                else:
+                    #self.fix_mel_lengths = [len(v) for v in self.vals]
+                    #flat_vals=[vv.tolist() for v in self.vals for vv in v]
+                    #dataset = tf.data.Dataset.from_tensor_slices(flat_vals)
+                    dataset = tf.data.Dataset.from_generator(generate_infer_batch, tf.float32, tf.TensorShape([160, 40]))
+                    dataset = dataset.batch(self.gpu_num * self.hparams.num_spk_per_batch)
                 return dataset
 
         return input_fn
@@ -347,13 +394,18 @@ class Trainer:
                 model=Model(self.hparams)
                 norm_out=model(features)
                 predictions = { "dvector": norm_out}
-                predict_hook_list=[]
-                batch_size=self.gpu_num * self.hparams.num_spk_per_batch
-                total_frames=functools.reduce(lambda a,b: len(a)+len(b), self.vals)
-                predict_tensors_log = {'predict_progress': self.global_step/(total_frames/batch_size)}
-                predict_hook_list.append(tf.train.LoggingTensorHook(
-                            tensors=predict_tensors_log, every_n_iter=1))
-                return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions, prediction_hooks=predict_hook_list)
+                #===== single file per predict=====
+                if single_predict:
+                    return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
+                #===== multiple file per predict=====
+                else:
+                    predict_hook_list=[]
+                    #batch_size=self.gpu_num * self.hparams.num_spk_per_batch
+                    #total_frames=functools.reduce(lambda a,b: len(a)+len(b), self.vals)
+                    #predict_tensors_log = {'predict_progress': self.global_step/(total_frames/batch_size)}
+                    #predict_hook_list.append(tf.train.LoggingTensorHook(
+                    #            tensors=predict_tensors_log, every_n_iter=1))
+                    return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions, prediction_hooks=predict_hook_list)
         return model_fn
 
     def _cal_loss(self, norm_out, labels):
@@ -469,25 +521,41 @@ class Trainer:
         tts.train(input_fn=self.get_input_fn(), max_steps=self.hparams.max_steps)
 
     def predict(self):
-        wav_list=glob('%s/*/Wave/*.wav' % self.hparams.in_dir)
+        self.wav_list=glob('%s/*/Wave/*.wav' % self.hparams.in_dir)
         tts=tf.estimator.Estimator(model_fn=self.get_model_fn(), model_dir=self.hparams.ckpt_dir)
         print("Start predicing")
-        #for wav_file in tqdm(wav_list):
-        result=list(tts.predict(input_fn=self.get_input_fn(wav_list)))
-        dvectors=np.array([res['dvector'] for res in result])
-        offset=0
-        for key, fix_mel_len in zip(self.keys, self.fix_mel_lengths):
-            mean_dvector=np.mean(dvectors[offset:offset+fix_mel_len], axis=0)
-            offset+=fix_mel_len
-            #path_fields=wav_file.split('/')
-            #spkid=path_fields[-3]
-            #filename='%s.npy' % os.path.splitext(path_fields[-1])[0]
-            #spk_dir='%s/%s' % (self.hparams.out_dir, spkid)
-            npy_save_path=key
-            spk_dir=os.path.basename(npy_save_path)
-            if not os.path.exists(spk_dir):
-                os.makedirs(spk_dir)
-            np.save(npy_save_path, mean_dvector)
+        #===== single file per predict=====
+        if single_predict:
+            for wav_file in tqdm(self.wav_list):
+                in_fn=self.get_input_fn([wav_file])
+                try:
+                    result=list(tts.predict(input_fn=in_fn))
+                except ValueError:
+                    #None dataset due to the too short wav caused by vad
+                    continue
+                dvectors=np.array([res['dvector'] for res in result])
+                mean_dvector=np.mean(dvectors, axis=0)
+                path_fields=wav_file.split('/')
+                spkid=path_fields[-3]
+                filename='%s.npy' % os.path.splitext(path_fields[-1])[0]
+                spk_dir='%s/%s' % (self.hparams.out_dir, spkid)
+                if not os.path.exists(spk_dir):
+                    os.makedirs(spk_dir)
+                npy_save_path='%s/%s' % (spk_dir, filename)
+                np.save(npy_save_path, mean_dvector)
+        #===== multi file per predict=====
+        else:
+            result=list(tts.predict(input_fn=self.get_input_fn()))
+            dvectors=np.array([res['dvector'] for res in result])
+            offset=0
+            for key, fix_mel_len in zip(self.keys, self.fix_mel_lengths):
+                mean_dvector=np.mean(dvectors[offset:offset+fix_mel_len], axis=0)
+                offset+=fix_mel_len
+                npy_save_path=key
+                spk_dir=os.path.dirname(npy_save_path)
+                if not os.path.exists(spk_dir):
+                    os.makedirs(spk_dir)
+                np.save(npy_save_path, mean_dvector)
 
 parser = argparse.ArgumentParser()
 
